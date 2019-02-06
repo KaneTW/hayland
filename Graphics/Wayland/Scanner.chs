@@ -80,7 +80,7 @@ generateDataTypes ps = liftM concat $ sequence $ map generateInterface (protocol
     return $ typeDec : versionInstance
 
 -- | The wayland registry allows one to construct global objects.
---   Its API is in wayland.xml, but that API is type-unsafe, so we construct the
+--   Its API is in wayland.xml, but that API is type-safe, so we construct the
 --   the bindings explicitly here.
 generateRegistryBind :: ProtocolSpec -> ProcessWithExports [Dec]
 generateRegistryBind ps = do
@@ -108,7 +108,7 @@ generateRegistryBind ps = do
             internalCName = mkName $ "wl_registry_" ++ iname ++ "_c_bind"
             exposeName = registryBindName pname iname
 
-        fore <- lift $ forImpD cCall unsafe "wl_proxy_marshal_constructor" internalCName [t|$(conT $ mkName "Registry") -> {#type uint32_t#} -> CInterface -> CUInt -> Ptr CChar -> CUInt -> Ptr () -> IO $(conT $ mkName $ interfaceTypeName pname iname) |]
+        fore <- lift $ forImpD cCall safe "wl_proxy_marshal_constructor" internalCName [t|$(conT $ mkName "Registry") -> {#type uint32_t#} -> CInterface -> CUInt -> Ptr CChar -> CUInt -> Ptr () -> IO $(conT $ mkName $ interfaceTypeName pname iname) |]
         exposureDec <- lift $
           [d|
             $(varP $ mkName exposeName) =
@@ -162,7 +162,7 @@ generateCInterfaceDecs ps = mapM bindCInterface (protocolInterfaces ps)
     bindCInterface iface =
       forImpD
         cCall
-        unsafe
+        safe
         ("&"++ (interfaceName iface) ++ "_interface")
         (interfaceCInterfaceName (protocolName ps) (interfaceName iface) )
         [t| (CInterface)|] -- pointer is fixed
@@ -200,7 +200,7 @@ generateMethods ps sc = liftM concat $ sequence $ map generateInterface $ filter
     let destroyName = mkName $ interfaceName iface ++ "_destructor"
         needsDefaultDestructor = ((sc == Client) && (not $ any messageIsDestructor $ interfaceRequests iface) && (interfaceName iface /= "wl_display"))
         defaultDestructorName = requestHaskName (protocolName ps) (interfaceName iface) "destroy"
-    foreignDestructor <- lift $ forImpD cCall unsafe "wl_proxy_destroy" destroyName [t|$(conT $ mkName $ interfaceTypeName (protocolName ps) (interfaceName iface)) -> IO ()|]
+    foreignDestructor <- lift $ forImpD cCall safe "wl_proxy_destroy" destroyName [t|$(conT $ mkName $ interfaceTypeName (protocolName ps) (interfaceName iface)) -> IO ()|]
     -- FIXME: in the destructors, we should additionally clean up memory allocated for the callback infrastructure
     -- This should happen in the default destructor here and in any other destructor-type message below.
     defaultDestructor <- lift $ [d|$(varP $ mkName defaultDestructorName) = \ proxy -> $(varE destroyName) proxy|]
@@ -227,7 +227,7 @@ generateMethods ps sc = liftM concat $ sequence $ map generateInterface $ filter
              Server -> do
                -- From the wayland header files:
                -- void wl_resource_post_event(struct wl_resource *resource, uint32_t opcode, ...);
-               cdec <- lift $ forImpD cCall unsafe "wl_resource_post_event" internalCName [t|$(conT $ mkName $ interfaceTypeName (protocolName ps) (interfaceName iface)) -> {#type uint32_t#} -> $(genMessageCType Nothing (messageArguments msg)) |]
+               cdec <- lift $ forImpD cCall safe "wl_resource_post_event" internalCName [t|$(conT $ mkName $ interfaceTypeName (protocolName ps) (interfaceName iface)) -> {#type uint32_t#} -> $(genMessageCType Nothing (messageArguments msg)) |]
                resourceName <- lift $ newName "resourceInternalName___"
                let messageIndexApplied = applyAtPosition (varE internalCName) (litE $ IntegerL $ fromIntegral idx) 1
                    resourceApplied = [e|$messageIndexApplied $(varE resourceName)|]
@@ -245,9 +245,9 @@ generateMethods ps sc = liftM concat $ sequence $ map generateInterface $ filter
                    returnType = [t|IO $(argTypeToCType returnArgument)|]
                cdec <- lift $ case numNewIds of
                      -- void wl_proxy_marshal(struct wl_proxy *proxy, uint32_t opcode, ...)
-                     0 -> forImpD cCall unsafe "wl_proxy_marshal" internalCName [t|$(conT $ mkName $ interfaceTypeName (protocolName ps) (interfaceName iface)) -> {#type uint32_t#} -> $(genMessageCType Nothing (messageArguments msg)) |]
+                     0 -> forImpD cCall safe "wl_proxy_marshal" internalCName [t|$(conT $ mkName $ interfaceTypeName (protocolName ps) (interfaceName iface)) -> {#type uint32_t#} -> $(genMessageCType Nothing (messageArguments msg)) |]
                      -- struct wl_proxy * wl_proxy_marshal_constructor(struct wl_proxy *proxy, uint32_t opcode, const struct wl_interface *interface, ...)
-                     1 -> forImpD cCall unsafe "wl_proxy_marshal_constructor" internalCName [t|$(conT $ mkName $ interfaceTypeName (protocolName ps) (interfaceName iface)) -> {#type uint32_t#} -> CInterface -> $(genMessageCType (Just returnType) (messageArguments msg)) |]
+                     1 -> forImpD cCall safe "wl_proxy_marshal_constructor" internalCName [t|$(conT $ mkName $ interfaceTypeName (protocolName ps) (interfaceName iface)) -> {#type uint32_t#} -> CInterface -> $(genMessageCType (Just returnType) (messageArguments msg)) |]
 
 
                proxyName <- lift $ newName "proxyInternalName___"
@@ -362,7 +362,7 @@ generateListenerMethods sp sc = do
         map (\ iface -> do
           let iname = interfaceName iface
               internalCName = mkName $ pname ++ "_" ++ iname ++ "_c_resource_create"
-          foreignDec <- forImpD cCall unsafe "wl_resource_create" internalCName [t|Util.Client -> CInterface -> CInt -> {#type uint32_t#} -> IO $(conT $ mkName $ interfaceTypeName pname iname) |]
+          foreignDec <- forImpD cCall safe "wl_resource_create" internalCName [t|Util.Client -> CInterface -> CInt -> {#type uint32_t#} -> IO $(conT $ mkName $ interfaceTypeName pname iname) |]
           neatDec <- [d|$(varP $ interfaceResourceCreator pname iname) = \ client id ->
                           $(varE internalCName) client $(varE $ interfaceCInterfaceName pname iname) $(litE $ IntegerL $ fromIntegral $ interfaceVersion iface) id|]
           return $ foreignDec : neatDec
@@ -450,7 +450,7 @@ generateListener sp iface sc = do
               Server -> [t|Util.Client -> $(conT $ mkName $ interfaceTypeName pname iname) -> $(genMessageWeirdCType Nothing $ messageArguments msg)|]  -- see large comment above
               Client -> [t|Ptr () -> $(conT $ mkName $ interfaceTypeName pname iname) -> $(genMessageCType Nothing $ messageArguments msg)|]
     wrapperName msg = messageListenerWrapperName sc iname (messageName msg)
-    wrapperDec msg = forImpD cCall unsafe "wrapper" (wrapperName msg) [t|$(mkListenerCType msg) -> IO (FunPtr ($(mkListenerCType msg))) |]
+    wrapperDec msg = forImpD cCall safe "wrapper" (wrapperName msg) [t|$(mkListenerCType msg) -> IO (FunPtr ($(mkListenerCType msg))) |]
 
     -- Bind add_listener. This instructs wayland to use our callbacks.
     haskName = requestHaskName pname iname "set_listener" -- dunno why I can't use this variable in the splice below.
@@ -468,7 +468,7 @@ generateListener sp iface sc = do
                    Server ->
                      forImpD
                        cCall
-                       unsafe
+                       safe
                        "wl_resource_set_implementation"
                        foreignName
                        [t|
@@ -483,7 +483,7 @@ generateListener sp iface sc = do
                    Client ->
                      forImpD
                        cCall
-                       unsafe
+                       safe
                        "wl_proxy_add_listener"
                        foreignName
                        [t|
